@@ -125,6 +125,7 @@ func (s *TurnaroundService) Create(row *model.Turnaround, checks []model.SafetyC
 		for index := range checks {
 			checks[index].TurnaroundID = row.ID
 			checks[index].Sequence = index + 1
+			checks[index].Kind = constants.CheckKindInitial
 			checks[index].Result = constants.CheckPending
 		}
 		if err := s.checkRepo.CreateManyTx(tx, checks); err != nil {
@@ -235,26 +236,48 @@ func allowedTurnaroundTransition(from, to string) bool {
 }
 
 // Readiness evaluates all persisted blockers for a single turnaround. It is a
-// read model used by both the inspection desk and the clearance review.
+// read model used by both the inspection desk and the clearance review, and it
+// carries the revocation recovery progress (unit states and recheck counts).
 func (s *TurnaroundService) Readiness(id uint64) (map[string]any, error) {
 	row, checks, err := s.Get(id)
 	if err != nil {
 		return nil, err
 	}
+	decision, decisionErr := s.clearanceRepo.FindByTurnaround(id)
+	clearanceState := constants.ClearancePending
+	clearanceReason := ""
+	if decisionErr == nil {
+		clearanceState = decision.State
+		clearanceReason = decision.Reason
+	}
+	// During recovery a failed recheck stops being a blocker once a newer
+	// recheck exists for the same equipment, mirroring the decide gate.
+	superseded, currentRoundRechecks := recoverySupersededRechecks(checks, decision, clearanceState)
 	blockers := make([]string, 0)
+	if clearanceState == constants.ClearanceRevoked && currentRoundRechecks == 0 {
+		blockers = append(blockers, "no recheck filed after revocation")
+	}
 	pending := 0
 	failed := 0
+	rechecks := map[string]int{"total": 0, "pending": 0, "passed": 0, "failed": 0}
 	for _, check := range checks {
 		switch check.Result {
 		case constants.CheckPending:
 			pending++
 			blockers = append(blockers, "pending check: "+check.CheckCode)
 		case constants.CheckFailed:
-			failed++
-			blockers = append(blockers, "failed check: "+check.CheckCode)
+			if !superseded[check.ID] {
+				failed++
+				blockers = append(blockers, "failed check: "+check.CheckCode)
+			}
+		}
+		if check.Kind == constants.CheckKindRecheck {
+			rechecks["total"]++
+			rechecks[check.Result]++
 		}
 	}
 	unitStates := make(map[string]string, len(row.GroundUnitIDs))
+	units := make([]map[string]any, 0, len(row.GroundUnitIDs))
 	for _, rawID := range row.GroundUnitIDs {
 		unitID, parseErr := strconv.ParseUint(rawID, 10, 64)
 		if parseErr != nil {
@@ -267,21 +290,53 @@ func (s *TurnaroundService) Readiness(id uint64) (map[string]any, error) {
 			continue
 		}
 		unitStates[rawID] = unit.State
+		units = append(units, map[string]any{"unit_id": unit.ID, "unit_code": unit.UnitCode, "state": unit.State})
 		if unit.State != constants.UnitAvailable {
 			blockers = append(blockers, "ground unit "+unit.UnitCode+" is "+unit.State)
 		}
-	}
-	decision, decisionErr := s.clearanceRepo.FindByTurnaround(id)
-	clearanceState := constants.ClearancePending
-	if decisionErr == nil {
-		clearanceState = decision.State
 	}
 	readyForDecision := pending == 0
 	readyForFullClearance := pending == 0 && failed == 0 && len(blockers) == 0
 	return map[string]any{
 		"turnaround_id": id, "flight_no": row.FlightNo, "status": row.Status,
 		"pending_checks": pending, "failed_checks": failed, "unit_states": unitStates,
-		"clearance_state": clearanceState, "ready_for_decision": readyForDecision,
+		"units": units, "clearance_state": clearanceState, "clearance_reason": clearanceReason,
+		"recheck_total": rechecks["total"], "recheck_pending": rechecks["pending"],
+		"recheck_passed": rechecks["passed"], "recheck_failed": rechecks["failed"],
+		"ready_for_decision": readyForDecision,
 		"ready_for_full_clearance": readyForFullClearance, "blockers": blockers,
 	}, nil
+}
+
+// recoverySupersededRechecks marks failed rechecks that a newer recheck for
+// the same equipment has replaced since the latest revocation. It also reports
+// how many rechecks have been filed in the current recovery round.
+func recoverySupersededRechecks(checks []model.SafetyCheck, decision *model.ClearanceDecision, clearanceState string) (map[uint64]bool, int) {
+	superseded := make(map[uint64]bool)
+	if clearanceState != constants.ClearanceRevoked || decision == nil {
+		return superseded, 0
+	}
+	latest := make(map[string]uint64)
+	currentRound := 0
+	for _, check := range checks {
+		if check.Kind != constants.CheckKindRecheck || !check.CreatedAt.After(decision.DecidedAt) {
+			continue
+		}
+		key := "general"
+		if check.GroundUnitID != nil {
+			key = strconv.FormatUint(*check.GroundUnitID, 10)
+		}
+		latest[key] = check.ID
+		currentRound++
+	}
+	isLatest := make(map[uint64]bool, len(latest))
+	for _, id := range latest {
+		isLatest[id] = true
+	}
+	for _, check := range checks {
+		if check.Kind == constants.CheckKindRecheck && check.Result == constants.CheckFailed && !isLatest[check.ID] {
+			superseded[check.ID] = true
+		}
+	}
+	return superseded, currentRound
 }

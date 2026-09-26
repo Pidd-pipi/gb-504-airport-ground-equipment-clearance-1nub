@@ -57,3 +57,32 @@ Compose 启动后四个服务均正常，其中后端、PostgreSQL、Redis 均�
 ## 已知约束
 
 项目按提示词固定使用 Angular 17。官方 npm registry 的安全审计报告包含 Angular 17 及其构建工具链的已知漏洞，自动修复要求跨到 Angular 22，属于破坏性升级并会违反技术版本要求，因此本轮未执行 `npm audit fix --force`。生产部署前应单独规划 Angular 主版本升级。
+
+---
+
+# 撤销恢复流程验证记录（2026-09-25）
+
+本轮补齐设备故障撤销后的恢复流程，以下均在真实 PostgreSQL 16.9 + Redis 7.2.5 + 后端服务上通过 API 验证。
+
+## 业务链验证
+
+- 设备 `TUG-100` 锁定后，关联周转的 `cleared` 决定在同一事务内自动撤销为 `revoked`，周转状态由 `decisioned` 回到 `checking`，撤销原因写入决定与审计（`turnaround_status=checking`）。
+- 撤销后立即重新决定被拒绝：`recovery requires at least one recheck after revocation`。
+- 检查员为故障设备新增复查，服务端自动标记 `kind=recheck`；复查待处理时重新决定被拒绝：`all safety checks must be reviewed before clearance`。
+- 最新复查不通过时重新决定被拒绝：`failed rechecks prevent re-clearance`；再次复查通过后旧失败复查被取代，不再阻断。
+- 复查通过但设备仍 `blocked` 时，完全放行与限制放行均被拒绝：`all assigned ground units must be available before clearance`。
+- 设备恢复 `available`（必须填写恢复说明）后重新决定成功：`revoked -> cleared`，周转进入 `decisioned` 并可正常 `completed`。
+- 地勤只读账号：`GET /checks`、`GET /clearance`、`GET /turnarounds/:id/readiness` 返回 200；`POST /checks`、`POST /clearance`、`PATCH /checks/:id/review` 均返回 403。
+- readiness 读模型与决定门槛一致：撤销后未建复查、待处理复查、最新复查失败、设备未恢复均出现在 `blockers` 中；被取代的失败复查自动移除。
+- 空库种子数据包含 HU7632 撤销恢复中的周转（撤销原因、blocked 设备、待处理复查），完整恢复链路在种子数据上实测通过。
+
+## 构建与静态检查
+
+以下命令均以退出码 0 完成：
+
+```text
+cd backend && go test ./... && go vet ./... && go build ./...
+cd frontend && npm ci && npm run build
+```
+
+新增纯函数测试覆盖 `revoked -> cleared/restricted` 迁移与 `validateRecoveryChecks` 红线（无复查、复查失败、撤销前复查不计入、复查通过放行）。

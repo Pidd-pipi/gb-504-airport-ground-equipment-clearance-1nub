@@ -75,6 +75,15 @@ const (
 
 var CheckResultValues = []string{CheckPending, CheckPassed, CheckFailed}
 
+// CheckKind separates the initial inspection plan from rechecks created
+// during the revocation recovery flow.
+const (
+	CheckKindInitial = "initial"
+	CheckKindRecheck = "recheck"
+)
+
+var CheckKindValues = []string{CheckKindInitial, CheckKindRecheck}
+
 const (
 	RiskLow      = "low"
 	RiskMedium   = "medium"
@@ -111,3 +120,4 @@ func In(values []string, value string) bool {
 func IsValidClearanceState(value string) bool { return In(ClearanceStateValues, value) }
 func IsValidUnitState(value string) bool      { return In(UnitStateValues, value) }
 func IsValidRiskLevel(value string) bool      { return In(RiskLevelValues, value) }
+func IsValidCheckKind(value string) bool      { return In(CheckKindValues, value) }

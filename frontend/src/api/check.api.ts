@@ -14,6 +14,19 @@ export function checkSummaryApi(http: HttpClient): Observable<SafetyCheckSummary
   return http.get<ApiResponse<SafetyCheckSummary>>(`${API_BASE}/v1/checks/summary`).pipe(map(extractData));
 }
 
+export interface CheckCreatePayload {
+  turnaround_id: number;
+  ground_unit_id?: number | null;
+  check_code: string;
+  item_name: string;
+  risk_level: SafetyCheck['risk_level'];
+  evidence?: string[];
+}
+
+export function checkCreateApi(http: HttpClient, payload: CheckCreatePayload): Observable<SafetyCheck> {
+  return http.post<ApiResponse<SafetyCheck>>(`${API_BASE}/v1/checks`, payload).pipe(map(extractData));
+}
+
 export function checkReviewApi(http: HttpClient, id: number, result: 'passed' | 'failed', evidence: string[], remark: string): Observable<SafetyCheck> {
   return http.patch<ApiResponse<SafetyCheck>>(`${API_BASE}/v1/checks/${id}/review`, { result, evidence, remark }).pipe(map(extractData));
 }

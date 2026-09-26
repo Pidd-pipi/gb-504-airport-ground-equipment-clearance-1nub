@@ -58,7 +58,17 @@ func (s *SafetyCheckService) Create(check *model.SafetyCheck, actor AuditContext
 			return util.NewAppError(constants.CodeStateConflict, "checks cannot be added after a clearance decision")
 		}
 		decision, err := s.clearanceRepo.FindByTurnaroundTx(tx, check.TurnaroundID)
-		if err != nil || decision.State != constants.ClearancePending {
+		if err != nil {
+			return util.NewAppError(constants.CodeStateConflict, "checks cannot be added after a clearance decision")
+		}
+		switch decision.State {
+		case constants.ClearancePending:
+			check.Kind = constants.CheckKindInitial
+		case constants.ClearanceRevoked:
+			// Recovery flow: checks added after a revocation are rechecks that
+			// gate the next clearance decision.
+			check.Kind = constants.CheckKindRecheck
+		default:
 			return util.NewAppError(constants.CodeStateConflict, "checks cannot be added after a clearance decision")
 		}
 		if check.GroundUnitID != nil {
@@ -84,7 +94,7 @@ func (s *SafetyCheckService) Create(check *model.SafetyCheck, actor AuditContext
 			return err
 		}
 		return persistTransitionAudit(tx, actor, "SAFETY_CHECK_CREATED", "checks", check.ID, map[string]any{
-			"turnaround_id": check.TurnaroundID, "check_code": check.CheckCode, "sequence": check.Sequence,
+			"turnaround_id": check.TurnaroundID, "check_code": check.CheckCode, "sequence": check.Sequence, "kind": check.Kind,
 		})
 	})
 	if err != nil {
@@ -119,7 +129,7 @@ func (s *SafetyCheckService) Review(id, operatorID uint64, result string, eviden
 			return util.NewAppError(constants.CodeStateConflict, "checks cannot be reviewed after a clearance decision")
 		}
 		decision, err := s.clearanceRepo.FindByTurnaroundTx(tx, initial.TurnaroundID)
-		if err != nil || decision.State != constants.ClearancePending {
+		if err != nil || (decision.State != constants.ClearancePending && decision.State != constants.ClearanceRevoked) {
 			return util.NewAppError(constants.CodeStateConflict, "checks cannot be reviewed after a clearance decision")
 		}
 		locked, err := s.repo.FindByIDTx(tx, id)

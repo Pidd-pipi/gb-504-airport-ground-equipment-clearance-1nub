@@ -3,8 +3,10 @@ package service
 import (
 	"errors"
 	"testing"
+	"time"
 
 	"groundclearance/internal/constants"
+	"groundclearance/internal/model"
 	"groundclearance/internal/util"
 )
 
@@ -18,7 +20,9 @@ func TestClearanceTransition(t *testing.T) {
 		{constants.ClearancePending, constants.ClearanceRevoked, true},
 		{constants.ClearanceCleared, constants.ClearanceRevoked, true},
 		{constants.ClearanceRestricted, constants.ClearanceRevoked, true},
-		{constants.ClearanceRevoked, constants.ClearanceCleared, false},
+		{constants.ClearanceRevoked, constants.ClearanceCleared, true},
+		{constants.ClearanceRevoked, constants.ClearanceRestricted, true},
+		{constants.ClearanceRevoked, constants.ClearanceRevoked, false},
 		{constants.ClearanceCleared, constants.ClearanceRestricted, false},
 	}
 	for _, item := range cases {
@@ -82,5 +86,29 @@ func TestSharedEnums(t *testing.T) {
 	}
 	if !constants.IsValidRiskLevel(constants.RiskCritical) || constants.IsValidRiskLevel("urgent") {
 		t.Fatal("risk validation mismatch")
+	}
+}
+
+func TestValidateRecoveryChecks(t *testing.T) {
+	revokedAt := time.Now().Add(-30 * time.Minute)
+	unitID := uint64(5)
+	filed := func(code, result string) model.SafetyCheck {
+		return model.SafetyCheck{CheckCode: code, Kind: constants.CheckKindRecheck, Result: result,
+			GroundUnitID: &unitID, CreatedAt: revokedAt.Add(10 * time.Minute)}
+	}
+	if err := validateRecoveryChecks([]model.SafetyCheck{}, revokedAt); err == nil {
+		t.Fatal("recovery without any recheck must be rejected")
+	}
+	if err := validateRecoveryChecks([]model.SafetyCheck{filed("X-R", constants.CheckFailed)}, revokedAt); err == nil {
+		t.Fatal("recovery with a failed recheck must be rejected")
+	}
+	// A recheck filed before the revocation cannot count towards recovery.
+	stale := filed("OLD-R", constants.CheckPassed)
+	stale.CreatedAt = revokedAt.Add(-time.Minute)
+	if err := validateRecoveryChecks([]model.SafetyCheck{stale}, revokedAt); err == nil {
+		t.Fatal("a recheck filed before revocation must not satisfy recovery")
+	}
+	if err := validateRecoveryChecks([]model.SafetyCheck{filed("X-R", constants.CheckPassed)}, revokedAt); err != nil {
+		t.Fatalf("recovery with a passing post-revocation recheck must pass: %v", err)
 	}
 }

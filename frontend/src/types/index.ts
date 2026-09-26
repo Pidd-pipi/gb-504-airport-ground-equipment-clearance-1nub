@@ -28,6 +28,7 @@ export type UnitState = 'available' | 'inspection' | 'blocked' | 'retired';
 export type ClearanceState = 'pending' | 'cleared' | 'restricted' | 'revoked';
 export type RiskLevel = 'low' | 'medium' | 'high' | 'critical';
 export type CheckResult = 'pending' | 'passed' | 'failed';
+export type CheckKind = 'initial' | 'recheck';
 
 export interface GroundUnit {
   id: number;
@@ -80,12 +81,40 @@ export interface SafetyCheck {
   sequence: number;
   check_code: string;
   item_name: string;
+  kind: CheckKind;
   risk_level: RiskLevel;
   result: CheckResult;
   evidence: string[];
   remark: string;
   checked_by: number;
   checked_at: string | null;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface ReadinessUnit {
+  unit_id: number;
+  unit_code: string;
+  state: UnitState;
+}
+
+export interface TurnaroundReadiness {
+  turnaround_id: number;
+  flight_no: string;
+  status: Turnaround['status'];
+  pending_checks: number;
+  failed_checks: number;
+  unit_states: Record<string, UnitState>;
+  units: ReadinessUnit[];
+  clearance_state: ClearanceState;
+  clearance_reason: string;
+  recheck_total: number;
+  recheck_pending: number;
+  recheck_passed: number;
+  recheck_failed: number;
+  ready_for_decision: boolean;
+  ready_for_full_clearance: boolean;
+  blockers: string[];
 }
 
 export interface SafetyCheckSummary {

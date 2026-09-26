@@ -98,24 +98,36 @@ func (s *ClearanceDecisionService) Decide(turnaroundID, operatorID uint64, state
 			if len(checks) == 0 {
 				return util.NewAppError(constants.CodeStateConflict, "at least one safety check is required")
 			}
+			recovering := current.State == constants.ClearanceRevoked
 			for _, check := range checks {
 				if check.Result == constants.CheckPending {
 					return util.NewAppError(constants.CodeStateConflict, "all safety checks must be reviewed before clearance")
 				}
 				if state == constants.ClearanceCleared && check.Result == constants.CheckFailed {
+					// In recovery a failed recheck only blocks while it is the
+					// latest recheck for its equipment; a follow-up passing
+					// recheck supersedes it and is evaluated below.
+					if recovering && check.Kind == constants.CheckKindRecheck {
+						continue
+					}
 					return util.NewAppError(constants.CodeStateConflict, "failed checks prevent full clearance")
 				}
 			}
-		}
-		if state == constants.ClearanceCleared {
-			for _, rawID := range turnaround.GroundUnitIDs {
-				unitID, parseErr := strconv.ParseUint(rawID, 10, 64)
-				if parseErr != nil || unitID == 0 {
-					return util.NewAppError(constants.CodeStateConflict, "turnaround contains an invalid ground unit")
+			if recovering {
+				if err := validateRecoveryChecks(checks, current.DecidedAt); err != nil {
+					return err
 				}
-				unit, findErr := s.unitRepo.FindByIDTx(tx, unitID)
-				if findErr != nil || unit.State != constants.UnitAvailable {
-					return util.NewAppError(constants.CodeStateConflict, "all assigned ground units must be available for full clearance")
+			}
+			if state == constants.ClearanceCleared || recovering {
+				for _, rawID := range turnaround.GroundUnitIDs {
+					unitID, parseErr := strconv.ParseUint(rawID, 10, 64)
+					if parseErr != nil || unitID == 0 {
+						return util.NewAppError(constants.CodeStateConflict, "turnaround contains an invalid ground unit")
+					}
+					unit, findErr := s.unitRepo.FindByIDTx(tx, unitID)
+					if findErr != nil || unit.State != constants.UnitAvailable {
+						return util.NewAppError(constants.CodeStateConflict, "all assigned ground units must be available before clearance")
+					}
 				}
 			}
 		}
@@ -132,6 +144,11 @@ func (s *ClearanceDecisionService) Decide(turnaroundID, operatorID uint64, state
 			return err
 		}
 		turnaround.Status = constants.TurnaroundDecisioned
+		if state == constants.ClearanceRevoked {
+			// Revocation re-opens the turnaround so inspectors can recheck the
+			// affected equipment before a new decision is formed.
+			turnaround.Status = constants.TurnaroundChecking
+		}
 		turnaround.Version++
 		if err := s.turnaroundRepo.SaveTx(tx, turnaround); err != nil {
 			return err
@@ -159,5 +176,38 @@ func allowedClearanceTransition(from, to string) bool {
 	if from == constants.ClearancePending {
 		return to == constants.ClearanceCleared || to == constants.ClearanceRestricted || to == constants.ClearanceRevoked
 	}
-	return (from == constants.ClearanceCleared || from == constants.ClearanceRestricted) && to == constants.ClearanceRevoked
+	if from == constants.ClearanceCleared || from == constants.ClearanceRestricted {
+		return to == constants.ClearanceRevoked
+	}
+	// A revoked clearance can be re-decided once the recovery rechecks pass.
+	return from == constants.ClearanceRevoked && (to == constants.ClearanceCleared || to == constants.ClearanceRestricted)
+}
+
+// validateRecoveryChecks enforces the revocation recovery red lines on the
+// rechecks themselves: at least one recheck recorded after the revocation and
+// the latest recheck per affected equipment passed. The caller additionally
+// requires every assigned ground unit to be available again.
+func validateRecoveryChecks(checks []model.SafetyCheck, revokedAt time.Time) error {
+	latest := make(map[string]model.SafetyCheck)
+	rechecks := 0
+	for _, check := range checks {
+		if check.Kind != constants.CheckKindRecheck || !check.CreatedAt.After(revokedAt) {
+			continue
+		}
+		key := "general"
+		if check.GroundUnitID != nil {
+			key = strconv.FormatUint(*check.GroundUnitID, 10)
+		}
+		latest[key] = check
+		rechecks++
+	}
+	if rechecks == 0 {
+		return util.NewAppError(constants.CodeStateConflict, "recovery requires at least one recheck after revocation")
+	}
+	for _, check := range latest {
+		if check.Result == constants.CheckFailed {
+			return util.NewAppError(constants.CodeStateConflict, "failed rechecks prevent re-clearance")
+		}
+	}
+	return nil
 }

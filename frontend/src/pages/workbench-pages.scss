@@ -110,6 +110,15 @@ td small.note { max-width: 190px; overflow: hidden; text-overflow: ellipsis; whi
 .form-warning mat-icon { font-size: 18px; width: 18px; height: 18px; }
 .danger-button { background: #b42318 !important; }
 
+.kind-tag { display: inline-block; margin-left: 6px; padding: 1px 6px; border-radius: 3px; background: #e8f2fb; color: #1d5d91; font-size: 10px; font-style: normal; font-weight: 600; vertical-align: 1px; }
+.kind-chip { display: inline-block; margin-left: 6px; padding: 1px 6px; border-radius: 3px; background: #e8f2fb; color: #1d5d91; font-size: 10px; font-style: normal; }
+.inspection-pane app-recovery-panel, .decision-pane app-recovery-panel { display: block; margin: 13px 0; }
+.recheck-form h3 { display: flex; align-items: center; gap: 6px; }
+.recheck-form h3 mat-icon { font-size: 18px; width: 18px; height: 18px; color: #0c8c83; }
+.recheck-hint { margin: 0 0 11px; padding: 8px 10px; border-radius: 4px; background: #eef6f5; color: #4d6067; font-size: 11px; line-height: 1.5; }
+.readonly-note { display: flex; align-items: center; gap: 7px; margin: 13px 0 0; padding: 9px 11px; border: 1px dashed #cfd9db; border-radius: 4px; color: #6d7d83; font-size: 11px; }
+.readonly-note mat-icon { font-size: 17px; width: 17px; height: 17px; color: #8a989d; }
+
 .audit-summary { min-height: 54px; display: flex; align-items: center; gap: 10px; margin-bottom: 18px; padding: 10px 14px; border: 1px solid #cde0dd; border-radius: 5px; background: #f2f9f7; color: #53676e; font-size: 11px; }
 .audit-summary > mat-icon { color: #14835d; }
 .audit-summary strong { display: block; color: #274139; font-size: 12px; }

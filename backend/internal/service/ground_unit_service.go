@@ -132,8 +132,8 @@ func (s *GroundUnitService) ChangeState(id uint64, state, notes string, version 
 			}
 			return err
 		}
-		for _, turnaround := range turnarounds {
-			decision := decisions[turnaround.ID]
+		for index := range turnarounds {
+			decision := decisions[turnarounds[index].ID]
 			if decision.State != constants.ClearanceCleared && decision.State != constants.ClearanceRestricted {
 				continue
 			}
@@ -148,9 +148,17 @@ func (s *GroundUnitService) ChangeState(id uint64, state, notes string, version 
 			if err := s.clearanceRepo.SaveTx(tx, decision); err != nil {
 				return err
 			}
+			// The revoked turnaround goes back to checking so the recovery
+			// rechecks can be recorded before a new clearance decision.
+			turnarounds[index].Status = constants.TurnaroundChecking
+			turnarounds[index].Version++
+			if err := s.turnaroundRepo.SaveTx(tx, &turnarounds[index]); err != nil {
+				return err
+			}
 			if err := persistTransitionAudit(tx, actor, "CLEARANCE_TRANSITION", "clearance", decision.ID, map[string]any{
 				"previous_state": previousDecision, "state": constants.ClearanceRevoked,
 				"reason": decision.Reason, "evidence": decision.Evidence, "trigger_ground_unit_id": locked.ID,
+				"turnaround_id": turnarounds[index].ID, "turnaround_status": constants.TurnaroundChecking,
 			}); err != nil {
 				return err
 			}

@@ -10,10 +10,10 @@ import { EvidenceListComponent } from './evidence-list.component';
   standalone: true,
   imports: [CommonModule, MatIconModule, StatusBadgeComponent, EvidenceListComponent],
   template: `
-    <section class="panel" [class.compact]="compact">
+    <section class="panel" [class.compact]="compact" [class.revoked]="decision?.state === 'revoked'">
       <header><span><mat-icon>verified_user</mat-icon>放行状态</span><app-status-badge [value]="decision?.state || 'pending'"></app-status-badge></header>
       <div *ngIf="decision; else awaiting" class="body">
-        <p><strong>决定依据</strong>{{ decision.reason || '等待放行员填写决定依据' }}</p>
+        <p><strong>{{ decision.state === 'revoked' ? '撤销原因' : '决定依据' }}</strong>{{ decision.reason || '等待放行员填写决定依据' }}</p>
         <p *ngIf="decision.restrictions"><strong>运行限制</strong>{{ decision.restrictions }}</p>
         <app-evidence-list [items]="decision.evidence || []"></app-evidence-list>
       </div>
@@ -22,6 +22,7 @@ import { EvidenceListComponent } from './evidence-list.component';
   `,
   styles: [`
     .panel { border: 1px solid #d7e1e3; border-left: 3px solid #0e9187; background: #f8fbfb; border-radius: 5px; }
+    .panel.revoked { border-color: #e8d3d0; border-left-color: #b42318; background: #fff8f7; }
     header { min-height: 48px; padding: 0 14px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #e0e7e8; }
     header > span { display: flex; align-items: center; gap: 7px; font-weight: 600; color: #273940; }
     header mat-icon { color: #0d8b82; font-size: 19px; width: 19px; height: 19px; }

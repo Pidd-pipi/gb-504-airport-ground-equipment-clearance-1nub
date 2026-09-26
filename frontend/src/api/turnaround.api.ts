@@ -1,6 +1,6 @@
 import { HttpClient, HttpParams } from '@angular/common/http';
 import { Observable, map } from 'rxjs';
-import { ApiResponse, PageResult, RiskLevel, Turnaround, TurnaroundSummary } from '../types';
+import { ApiResponse, PageResult, RecoveryDetail, RiskLevel, Turnaround, TurnaroundSummary } from '../types';
 import { API_BASE, extractData } from '../utils/request';
 
 export interface TurnaroundPayload {
@@ -38,4 +38,8 @@ export function turnaroundCreateApi(http: HttpClient, payload: TurnaroundPayload
 
 export function turnaroundStatusApi(http: HttpClient, id: number, status: string, version: number): Observable<Turnaround> {
   return http.patch<ApiResponse<Turnaround>>(`${API_BASE}/v1/turnarounds/${id}/status`, { status, version }).pipe(map(extractData));
+}
+
+export function turnaroundRecoveryApi(http: HttpClient, id: number): Observable<RecoveryDetail> {
+  return http.get<ApiResponse<RecoveryDetail>>(`${API_BASE}/v1/turnarounds/${id}/recovery`).pipe(map(extractData));
 }

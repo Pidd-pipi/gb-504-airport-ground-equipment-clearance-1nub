@@ -125,6 +125,7 @@ func (s *TurnaroundService) Create(row *model.Turnaround, checks []model.SafetyC
 		for index := range checks {
 			checks[index].TurnaroundID = row.ID
 			checks[index].Sequence = index + 1
+			checks[index].Kind = constants.CheckKindInitial
 			checks[index].Result = constants.CheckPending
 		}
 		if err := s.checkRepo.CreateManyTx(tx, checks); err != nil {
@@ -234,6 +235,76 @@ func allowedTurnaroundTransition(from, to string) bool {
 		(from == constants.TurnaroundDecisioned && to == constants.TurnaroundCompleted)
 }
 
+// RecoveryDetail assembles the read model for the post-revocation recovery
+// workflow: the revocation reason, the current state of every assigned unit,
+// the recovery recheck progress and the blockers that still prevent a new
+// clearance decision. Ground workers use the same read-only view.
+func (s *TurnaroundService) RecoveryDetail(id uint64) (map[string]any, error) {
+	row, err := s.repo.FindByID(id)
+	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			return nil, util.NewAppError(constants.CodeNotFound, constants.MsgNotFound)
+		}
+		return nil, err
+	}
+	checks, err := s.checkRepo.ListByTurnaround(id)
+	if err != nil {
+		return nil, err
+	}
+	decision, err := s.clearanceRepo.FindByTurnaround(id)
+	if err != nil {
+		return nil, err
+	}
+	units := make([]map[string]any, 0, len(row.GroundUnitIDs))
+	rechecks := make([]model.SafetyCheck, 0)
+	for _, check := range checks {
+		if check.Kind == constants.CheckKindRecheck {
+			rechecks = append(rechecks, check)
+		}
+	}
+	blockers := make([]string, 0)
+	if decision.State != constants.ClearanceRevoked {
+		blockers = append(blockers, "clearance is not revoked")
+	}
+	findUnit := func(unitID uint64) (*model.GroundUnit, error) { return s.unitRepo.FindByID(unitID) }
+	blockers = append(blockers, evaluateRecoveryGates(row, checks, findUnit)...)
+	for _, rawID := range row.GroundUnitIDs {
+		unitID, parseErr := strconv.ParseUint(rawID, 10, 64)
+		entry := map[string]any{"id": rawID, "state": "unknown", "unit_code": "", "name": ""}
+		if parseErr == nil && unitID > 0 {
+			if unit, findErr := s.unitRepo.FindByID(unitID); findErr == nil {
+				entry["id"] = unit.ID
+				entry["state"] = unit.State
+				entry["unit_code"] = unit.UnitCode
+				entry["name"] = unit.Name
+				entry["notes"] = unit.Notes
+			}
+		}
+		units = append(units, entry)
+	}
+	recheckPending, recheckPassed, recheckFailed := 0, 0, 0
+	for _, recheck := range rechecks {
+		switch recheck.Result {
+		case constants.CheckPending:
+			recheckPending++
+		case constants.CheckPassed:
+			recheckPassed++
+		case constants.CheckFailed:
+			recheckFailed++
+		}
+	}
+	return map[string]any{
+		"turnaround": row, "clearance": decision, "units": units, "rechecks": rechecks,
+		"recheck_progress": map[string]any{
+			"total": len(rechecks), "pending": recheckPending, "passed": recheckPassed, "failed": recheckFailed,
+		},
+		"revoked":            decision.State == constants.ClearanceRevoked,
+		"revocation_reason":  decision.Reason,
+		"recovery_blockers":  blockers,
+		"recovery_complete":  decision.State == constants.ClearanceRevoked && len(blockers) == 0,
+	}, nil
+}
+
 // Readiness evaluates all persisted blockers for a single turnaround. It is a
 // read model used by both the inspection desk and the clearance review.
 func (s *TurnaroundService) Readiness(id uint64) (map[string]any, error) {
@@ -251,8 +322,17 @@ func (s *TurnaroundService) Readiness(id uint64) (map[string]any, error) {
 			blockers = append(blockers, "pending check: "+check.CheckCode)
 		case constants.CheckFailed:
 			failed++
-			blockers = append(blockers, "failed check: "+check.CheckCode)
 		}
+	}
+	decision, decisionErr := s.clearanceRepo.FindByTurnaround(id)
+	clearanceState := constants.ClearancePending
+	if decisionErr == nil {
+		clearanceState = decision.State
+	}
+	// A failed recheck superseded by a later passing recheck for the same unit
+	// stays in the ledger but no longer blocks the read model during recovery.
+	for _, check := range blockingFailedChecks(checks, clearanceState == constants.ClearanceRevoked) {
+		blockers = append(blockers, "failed check: "+check.CheckCode)
 	}
 	unitStates := make(map[string]string, len(row.GroundUnitIDs))
 	for _, rawID := range row.GroundUnitIDs {
@@ -270,11 +350,6 @@ func (s *TurnaroundService) Readiness(id uint64) (map[string]any, error) {
 		if unit.State != constants.UnitAvailable {
 			blockers = append(blockers, "ground unit "+unit.UnitCode+" is "+unit.State)
 		}
-	}
-	decision, decisionErr := s.clearanceRepo.FindByTurnaround(id)
-	clearanceState := constants.ClearancePending
-	if decisionErr == nil {
-		clearanceState = decision.State
 	}
 	readyForDecision := pending == 0
 	readyForFullClearance := pending == 0 && failed == 0 && len(blockers) == 0

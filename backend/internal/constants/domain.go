@@ -75,6 +75,15 @@ const (
 
 var CheckResultValues = []string{CheckPending, CheckPassed, CheckFailed}
 
+// CheckKind separates initial checks from recovery rechecks opened after a
+// clearance revocation caused by faulty ground equipment.
+const (
+	CheckKindInitial = "initial"
+	CheckKindRecheck = "recheck"
+)
+
+var CheckKindValues = []string{CheckKindInitial, CheckKindRecheck}
+
 const (
 	RiskLow      = "low"
 	RiskMedium   = "medium"
@@ -95,8 +104,11 @@ const (
 	LogGroundUnitCreated      = "ground unit created"
 	LogGroundUnitStateChanged = "ground unit state changed"
 	LogSafetyCheckCreated     = "safety check created"
+	LogSafetyCheckRecheckOpen = "safety recheck opened"
 	LogSafetyCheckReviewed    = "safety check reviewed"
 	LogClearanceChanged       = "clearance state changed"
+	LogClearanceRecovered     = "clearance recovered"
+	LogTurnaroundReopened     = "turnaround reopened after revocation"
 )
 
 func In(values []string, value string) bool {

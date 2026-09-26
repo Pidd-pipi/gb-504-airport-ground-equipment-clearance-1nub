@@ -37,7 +37,7 @@ func (h *SafetyCheckHandler) List(c *gin.Context) {
 		}
 		turnaroundID = parsed
 	}
-	rows, total, err := h.svc.List(query.Page, query.PageSize, turnaroundID, c.Query("result"))
+	rows, total, err := h.svc.List(query.Page, query.PageSize, turnaroundID, c.Query("result"), c.Query("kind"))
 	if err != nil {
 		handleServiceError(c, h.logger, err, "safety check list")
 		return
@@ -65,7 +65,13 @@ func (h *SafetyCheckHandler) Create(c *gin.Context) {
 	}
 	check := &model.SafetyCheck{TurnaroundID: request.TurnaroundID, GroundUnitID: request.GroundUnitID,
 		CheckCode: request.CheckCode, ItemName: request.ItemName, RiskLevel: request.RiskLevel, Evidence: model.JSONList(request.Evidence)}
-	created, err := h.svc.Create(check, requestAuditContext(c))
+	var created *model.SafetyCheck
+	var err error
+	if request.Kind == constants.CheckKindRecheck {
+		created, err = h.svc.CreateRecheck(check, requestAuditContext(c))
+	} else {
+		created, err = h.svc.Create(check, requestAuditContext(c))
+	}
 	if err != nil {
 		handleServiceError(c, h.logger, err, "safety check create")
 		return

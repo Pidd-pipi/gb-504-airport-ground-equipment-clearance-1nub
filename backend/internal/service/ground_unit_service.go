@@ -91,14 +91,25 @@ func (s *GroundUnitService) ChangeState(id uint64, state, notes string, version 
 	}
 	var unit *model.GroundUnit
 	err := s.db.Transaction(func(tx *gorm.DB) error {
+		locked, lockErr := s.repo.FindByIDTx(tx, id)
+		if lockErr != nil {
+			if errors.Is(lockErr, repository.ErrNotFound) {
+				return util.NewAppError(constants.CodeNotFound, constants.MsgNotFound)
+			}
+			return lockErr
+		}
+		// Only an equipment fault — leaving the available pool — revokes the
+		// clearances of active turnarounds. Transitions between inspection and
+		// blocked and the recovery back to available never auto-revoke.
+		faultOccurred := locked.State == constants.UnitAvailable && state != constants.UnitAvailable
 		var turnarounds []model.Turnaround
 		decisions := make(map[uint64]*model.ClearanceDecision)
-		if state != constants.UnitAvailable {
-			var err error
-			turnarounds, err = s.turnaroundRepo.FindActiveByGroundUnitTx(tx, id)
-			if err != nil {
-				return err
+		if faultOccurred {
+			activeTurnarounds, findErr := s.turnaroundRepo.FindActiveByGroundUnitTx(tx, id)
+			if findErr != nil {
+				return findErr
 			}
+			turnarounds = activeTurnarounds
 			for index := range turnarounds {
 				decision, findErr := s.clearanceRepo.FindByTurnaroundTx(tx, turnarounds[index].ID)
 				if findErr != nil {
@@ -106,13 +117,6 @@ func (s *GroundUnitService) ChangeState(id uint64, state, notes string, version 
 				}
 				decisions[turnarounds[index].ID] = decision
 			}
-		}
-		locked, err := s.repo.FindByIDTx(tx, id)
-		if err != nil {
-			if errors.Is(err, repository.ErrNotFound) {
-				return util.NewAppError(constants.CodeNotFound, constants.MsgNotFound)
-			}
-			return err
 		}
 		if locked.Version != version {
 			return util.NewAppError(constants.CodeConflict, "equipment was updated by another operator")
@@ -153,6 +157,25 @@ func (s *GroundUnitService) ChangeState(id uint64, state, notes string, version 
 				"reason": decision.Reason, "evidence": decision.Evidence, "trigger_ground_unit_id": locked.ID,
 			}); err != nil {
 				return err
+			}
+			// An equipment fault reopens the turnaround. It leaves the "decisioned"
+			// stage and returns to "checking" so inspectors can open recovery rechecks
+			// before a safety manager is allowed to decide again.
+			if turnaround.Status == constants.TurnaroundDecisioned {
+				previousStatus := turnaround.Status
+				turnaround.Status = constants.TurnaroundChecking
+				if err := s.turnaroundRepo.UpdateStatusTx(tx, &turnaround, turnaround.Version); err != nil {
+					if errors.Is(err, repository.ErrConflict) {
+						return util.NewAppError(constants.CodeConflict, "turnaround was updated by another operator")
+					}
+					return err
+				}
+				if err := persistTransitionAudit(tx, actor, "TURNAROUND_REOPENED", "turnarounds", turnaround.ID, map[string]any{
+					"previous_status": previousStatus, "status": constants.TurnaroundChecking,
+					"trigger": "ground_unit_state", "ground_unit_id": locked.ID, "version": turnaround.Version,
+				}); err != nil {
+					return err
+				}
 			}
 		}
 		if err := persistTransitionAudit(tx, actor, "GROUND_UNIT_STATE_TRANSITION", "ground-units", locked.ID, map[string]any{

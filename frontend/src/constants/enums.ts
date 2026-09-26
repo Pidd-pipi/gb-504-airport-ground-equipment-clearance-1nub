@@ -1,4 +1,4 @@
-import { ClearanceState, RiskLevel, UnitState } from '../types';
+import { CheckKind, ClearanceState, RiskLevel, UnitState } from '../types';
 
 export const ROLE = {
   ADMIN: 'admin',
@@ -33,6 +33,11 @@ export const CLEARANCE_STATE_TEXT: Record<ClearanceState, string> = {
   cleared: '已放行',
   restricted: '限制放行',
   revoked: '已撤销',
+};
+
+export const CHECK_KIND_TEXT: Record<CheckKind, string> = {
+  initial: '首检',
+  recheck: '故障复查',
 };
 
 export const RISK_TEXT: Record<RiskLevel, string> = {

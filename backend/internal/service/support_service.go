@@ -74,21 +74,31 @@ func (s *SeedService) Seed() error {
 		turnarounds := []model.Turnaround{
 			{FlightNo: "CA1831", Stand: "A12", Phase: "servicing", ScheduledAt: now.Add(35 * time.Minute), RiskLevel: constants.RiskHigh, Status: constants.TurnaroundChecking, GroundUnitIDs: model.JSONList{"1", "2"}, CoordinatorID: users[1].ID},
 			{FlightNo: "MU2458", Stand: "B06", Phase: "departure", ScheduledAt: now.Add(90 * time.Minute), RiskLevel: constants.RiskMedium, Status: constants.TurnaroundOpen, GroundUnitIDs: model.JSONList{"4"}, CoordinatorID: users[1].ID},
+			// Equipment BLT-088 failed after full clearance: the decision was
+			// revoked and the turnaround was reopened so inspectors can open a
+			// recovery recheck before the safety manager can decide again.
+			{FlightNo: "CZ8621", Stand: "B06", Phase: "departure", ScheduledAt: now.Add(110 * time.Minute), RiskLevel: constants.RiskHigh, Status: constants.TurnaroundChecking, GroundUnitIDs: model.JSONList{"3"}, CoordinatorID: users[1].ID},
 		}
 		if err := tx.Create(&turnarounds).Error; err != nil {
 			return err
 		}
 		checks := []model.SafetyCheck{
-			{TurnaroundID: turnarounds[0].ID, GroundUnitID: &units[0].ID, Sequence: 1, CheckCode: "TUG-BRAKE", ItemName: "牵引车制动与转向", RiskLevel: constants.RiskHigh, Result: constants.CheckPassed, Evidence: model.JSONList{"brake-test-20260822.jpg"}, CheckedBy: users[2].ID, CheckedAt: &now},
-			{TurnaroundID: turnarounds[0].ID, GroundUnitID: &units[1].ID, Sequence: 2, CheckCode: "GPU-INSULATION", ItemName: "地面电源绝缘及接地", RiskLevel: constants.RiskCritical, Result: constants.CheckPending},
-			{TurnaroundID: turnarounds[1].ID, GroundUnitID: &units[3].ID, Sequence: 1, CheckCode: "WTR-SEAL", ItemName: "水管密封与停车制动", RiskLevel: constants.RiskMedium, Result: constants.CheckPending},
+			{TurnaroundID: turnarounds[0].ID, GroundUnitID: &units[0].ID, Sequence: 1, Kind: constants.CheckKindInitial, CheckCode: "TUG-BRAKE", ItemName: "牵引车制动与转向", RiskLevel: constants.RiskHigh, Result: constants.CheckPassed, Evidence: model.JSONList{"brake-test-20260822.jpg"}, CheckedBy: users[2].ID, CheckedAt: &now},
+			{TurnaroundID: turnarounds[0].ID, GroundUnitID: &units[1].ID, Sequence: 2, Kind: constants.CheckKindInitial, CheckCode: "GPU-INSULATION", ItemName: "地面电源绝缘及接地", RiskLevel: constants.RiskCritical, Result: constants.CheckPending},
+			{TurnaroundID: turnarounds[1].ID, GroundUnitID: &units[3].ID, Sequence: 1, Kind: constants.CheckKindInitial, CheckCode: "WTR-SEAL", ItemName: "水管密封与停车制动", RiskLevel: constants.RiskMedium, Result: constants.CheckPending},
+			{TurnaroundID: turnarounds[2].ID, GroundUnitID: &units[2].ID, Sequence: 1, Kind: constants.CheckKindInitial, CheckCode: "BLT-STOP", ItemName: "传送带急停与制动", RiskLevel: constants.RiskHigh, Result: constants.CheckPassed, Evidence: model.JSONList{"blt-stop-20260822.jpg"}, CheckedBy: users[2].ID, CheckedAt: &now},
 		}
 		if err := tx.Create(&checks).Error; err != nil {
 			return err
 		}
+		revokedAt := now.Add(-15 * time.Minute)
 		decisions := []model.ClearanceDecision{
 			{TurnaroundID: turnarounds[0].ID, State: constants.ClearancePending, Reason: "awaiting checks"},
 			{TurnaroundID: turnarounds[1].ID, State: constants.ClearancePending, Reason: "awaiting checks"},
+			{TurnaroundID: turnarounds[2].ID, State: constants.ClearanceRevoked, PreviousState: constants.ClearanceCleared,
+				Reason:    "assigned equipment BLT-088 changed to blocked: 急停开关异常",
+				Evidence:  model.JSONList{"blt-stop-fault-20260822.jpg", "ground-unit:BLT-088"},
+				OperatorID: users[2].ID, DecidedAt: revokedAt},
 		}
 		if err := tx.Create(&decisions).Error; err != nil {
 			return err

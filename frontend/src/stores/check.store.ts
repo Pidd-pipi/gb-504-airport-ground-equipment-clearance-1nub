@@ -16,11 +16,11 @@ export class CheckStore {
 
   constructor(private readonly http: HttpClient) {}
 
-  load(page = 1, pageSize = 20, turnaroundId?: number, result = ''): void {
+  load(page = 1, pageSize = 20, turnaroundId?: number, result = '', kind = ''): void {
     const requestVersion = ++this.requestVersion;
     this.loading.set(true);
     this.error.set('');
-    forkJoin({ list: checkListApi(this.http, page, pageSize, turnaroundId, result), summary: checkSummaryApi(this.http) }).subscribe({
+    forkJoin({ list: checkListApi(this.http, page, pageSize, turnaroundId, result, kind), summary: checkSummaryApi(this.http) }).subscribe({
       next: response => { if (requestVersion !== this.requestVersion) return; this.items.set(response.list.list); this.total.set(response.list.total); this.summary.set(response.summary); this.loading.set(false); },
       error: error => { if (requestVersion !== this.requestVersion) return; this.error.set(parseHttpError(error)); this.loading.set(false); },
     });

@@ -1,5 +1,5 @@
 import { CommonModule } from '@angular/common';
-import { Component, inject, OnInit } from '@angular/core';
+import { Component, inject, OnInit, signal } from '@angular/core';
 import { FormBuilder, ReactiveFormsModule, Validators } from '@angular/forms';
 import { MatButtonModule } from '@angular/material/button';
 import { MatDialog, MatDialogModule } from '@angular/material/dialog';
@@ -11,17 +11,19 @@ import { MatPaginatorModule, PageEvent } from '@angular/material/paginator';
 import { MatSelectModule } from '@angular/material/select';
 import { MatSnackBar, MatSnackBarModule } from '@angular/material/snack-bar';
 import { checkReviewApi } from '../api/check.api';
+import { turnaroundRecoveryApi } from '../api/turnaround.api';
 import { ClearancePanelComponent } from '../components/common/clearance-panel.component';
 import { ConfirmDialogComponent } from '../components/common/confirm-dialog.component';
 import { EvidenceListComponent } from '../components/common/evidence-list.component';
+import { RecoveryPanelComponent } from '../components/common/recovery-panel.component';
 import { RiskBadgeComponent } from '../components/common/risk-badge.component';
 import { StatusBadgeComponent } from '../components/common/status-badge.component';
-import { ROLE } from '../constants/enums';
+import { CHECK_KIND_TEXT, ROLE } from '../constants/enums';
 import { useAuth } from '../hooks/use-auth';
 import { usePagination } from '../hooks/use-pagination';
 import { CheckStore } from '../stores/check.store';
 import { ClearanceStore } from '../stores/clearance.store';
-import { SafetyCheck } from '../types';
+import { RecoveryDetail, SafetyCheck } from '../types';
 import { parseHttpError, useHttp } from '../utils/request';
 
 @Component({
@@ -30,7 +32,7 @@ import { parseHttpError, useHttp } from '../utils/request';
   imports: [
     CommonModule, ReactiveFormsModule, MatButtonModule, MatDialogModule, MatFormFieldModule, MatIconModule,
     MatInputModule, MatPaginatorModule, MatProgressBarModule, MatSelectModule, MatSnackBarModule, ClearancePanelComponent,
-    EvidenceListComponent, RiskBadgeComponent, StatusBadgeComponent,
+    EvidenceListComponent, RecoveryPanelComponent, RiskBadgeComponent, StatusBadgeComponent,
   ],
   template: `
     <header class="page-head">
@@ -47,13 +49,13 @@ import { parseHttpError, useHttp } from '../utils/request';
     <section class="check-layout">
       <div class="check-list">
         <div class="table-tools">
-          <div class="segmented"><button [class.selected]="filter === ''" (click)="setFilter('')">全部</button><button [class.selected]="filter === 'pending'" (click)="setFilter('pending')">待检查</button><button [class.selected]="filter === 'failed'" (click)="setFilter('failed')">未通过</button></div>
+          <div class="segmented"><button [class.selected]="filter === ''" (click)="setFilter('', '')">全部</button><button [class.selected]="filter === 'pending'" (click)="setFilter('pending', '')">待检查</button><button [class.selected]="filter === 'failed'" (click)="setFilter('failed', '')">未通过</button><button [class.selected]="kindFilter === 'recheck'" (click)="setFilter('', 'recheck')">故障复查</button></div>
         </div>
         <mat-progress-bar *ngIf="store.loading()" mode="indeterminate"></mat-progress-bar>
         <p class="error" *ngIf="store.error()">{{ store.error() }}</p>
         <button type="button" class="check-row" *ngFor="let item of store.items()" [class.selected]="selected?.id === item.id" (click)="select(item)">
           <span class="sequence">{{ item.sequence | number:'2.0' }}</span>
-          <span class="check-copy"><strong>{{ item.item_name }}</strong><small>{{ item.check_code }} · 周转 #{{ item.turnaround_id }}<span *ngIf="item.ground_unit_id"> · 设备 #{{ item.ground_unit_id }}</span></small></span>
+          <span class="check-copy"><strong>{{ item.item_name }}<em class="kind-tag" *ngIf="item.kind === 'recheck'">复查</em></strong><small>{{ item.check_code }} · 周转 #{{ item.turnaround_id }}<span *ngIf="item.ground_unit_id"> · 设备 #{{ item.ground_unit_id }}</span></small></span>
           <app-risk-badge [level]="item.risk_level"></app-risk-badge>
           <app-status-badge [value]="item.result"></app-status-badge>
           <mat-icon>chevron_right</mat-icon>
@@ -64,14 +66,15 @@ import { parseHttpError, useHttp } from '../utils/request';
 
       <aside class="inspection-pane" *ngIf="selected; else selectHint">
         <header><span><small>检查项 {{ selected.check_code }}</small><strong>{{ selected.item_name }}</strong></span><app-status-badge [value]="selected.result"></app-status-badge></header>
-        <div class="inspection-meta"><span><small>周转编号</small>#{{ selected.turnaround_id }}</span><span><small>设备编号</small>{{ selected.ground_unit_id ? '#' + selected.ground_unit_id : '通用项' }}</span><span><small>风险级别</small><app-risk-badge [level]="selected.risk_level"></app-risk-badge></span></div>
+        <div class="inspection-meta"><span><small>周转编号</small>#{{ selected.turnaround_id }}</span><span><small>设备编号</small>{{ selected.ground_unit_id ? '#' + selected.ground_unit_id : '通用项' }}</span><span><small>检查类型</small>{{ kindText[selected.kind] || '首检' }}</span></div>
+        <app-recovery-panel *ngIf="selected.kind === 'recheck' || isRevoked(selected.turnaround_id)" [detail]="recoveryFor(selected.turnaround_id)" [canInspect]="canReview" (changed)="onRecoveryChange()"></app-recovery-panel>
         <section class="evidence-block"><h3>现场证据</h3><app-evidence-list [items]="selected.evidence || []"></app-evidence-list><p *ngIf="selected.remark">{{ selected.remark }}</p></section>
         <form *ngIf="selected.result === 'pending' && canReview" [formGroup]="reviewForm" (ngSubmit)="review()" class="review-form">
-          <h3>形成检查结论</h3>
+          <h3>{{ selected.kind === 'recheck' ? '形成复查结论' : '形成检查结论' }}</h3>
           <mat-form-field appearance="outline"><mat-label>检查结论</mat-label><mat-select formControlName="result"><mat-option value="passed">检查通过</mat-option><mat-option value="failed">检查不通过</mat-option></mat-select></mat-form-field>
           <mat-form-field appearance="outline"><mat-label>证据文件名 / 编号</mat-label><input matInput formControlName="evidence" placeholder="例如 GPU-test-0822.jpg"></mat-form-field>
           <mat-form-field appearance="outline"><mat-label>检查说明</mat-label><textarea matInput rows="3" formControlName="remark"></textarea></mat-form-field>
-          <button mat-flat-button type="submit" [disabled]="reviewForm.invalid || saving"><mat-icon>task_alt</mat-icon>提交结论</button>
+          <button mat-flat-button type="submit" [disabled]="reviewForm.invalid || saving"><mat-icon>task_alt</mat-icon>{{ selected.kind === 'recheck' ? '提交复查结论' : '提交结论' }}</button>
         </form>
         <app-clearance-panel [decision]="decisionFor(selected.turnaround_id)" [compact]="true"></app-clearance-panel>
       </aside>
@@ -88,9 +91,12 @@ export class ChecksPage implements OnInit {
   private readonly snack = inject(MatSnackBar);
   private readonly auth = useAuth();
   readonly pagination = usePagination(20);
-  readonly canReview = this.auth.hasRole(ROLE.ADMIN, ROLE.SAFETY_MANAGER, ROLE.INSPECTOR);
+  readonly canReview = this.auth.hasRole(ROLE.ADMIN, ROLE.INSPECTOR);
+  readonly kindText = CHECK_KIND_TEXT;
   selected: SafetyCheck | null = null;
   filter = '';
+  kindFilter = '';
+  private recoveryCache = signal(new Map<number, RecoveryDetail>());
   saving = false;
   readonly reviewForm = this.fb.nonNullable.group({
     result: ['passed' as 'passed' | 'failed', Validators.required],
@@ -99,11 +105,38 @@ export class ChecksPage implements OnInit {
 
   ngOnInit(): void { this.reload(); this.clearances.load(1, 200); }
   get pendingCount(): number { return this.store.summary().results.pending; }
-  setFilter(result: string): void { this.filter = result; this.selected = null; this.pagination.reset(); this.reload(); }
-  reload(): void { this.store.load(this.pagination.page(), this.pagination.pageSize(), undefined, this.filter); }
+  setFilter(result: string, kind: string): void {
+    this.filter = result;
+    this.kindFilter = kind;
+    this.selected = null;
+    this.pagination.reset();
+    this.reload();
+  }
+  reload(): void { this.store.load(this.pagination.page(), this.pagination.pageSize(), undefined, this.filter, this.kindFilter); }
   pageChanged(event: PageEvent): void { this.selected = null; this.pagination.setPage(event.pageIndex + 1); this.pagination.pageSize.set(event.pageSize); this.reload(); }
-  select(item: SafetyCheck): void { this.selected = item; this.reviewForm.reset({ result: 'passed', evidence: '', remark: '' }); }
+  select(item: SafetyCheck): void {
+    this.selected = item;
+    this.reviewForm.reset({ result: 'passed', evidence: '', remark: '' });
+    if (this.isRevoked(item.turnaround_id)) {
+      this.loadRecovery(item.turnaround_id);
+    }
+  }
   decisionFor(turnaroundId: number) { return this.clearances.items().find(item => item.turnaround_id === turnaroundId) ?? null; }
+  isRevoked(turnaroundId: number): boolean { return this.decisionFor(turnaroundId)?.state === 'revoked'; }
+  recoveryFor(turnaroundId: number): RecoveryDetail | null { return this.recoveryCache().get(turnaroundId) ?? null; }
+
+  loadRecovery(turnaroundId: number): void {
+    turnaroundRecoveryApi(this.http, turnaroundId).subscribe({
+      next: detail => { this.recoveryCache.update(cache => new Map(cache).set(turnaroundId, detail)); },
+      error: error => this.snack.open(parseHttpError(error), '关闭', { duration: 4000 }),
+    });
+  }
+
+  onRecoveryChange(): void {
+    this.reload();
+    this.clearances.load(1, 200);
+    if (this.selected) this.loadRecovery(this.selected.turnaround_id);
+  }
 
   review(): void {
     if (!this.selected || this.reviewForm.invalid) return;
@@ -116,7 +149,14 @@ export class ChecksPage implements OnInit {
       if (!confirmed || !this.selected) return;
       this.saving = true;
       checkReviewApi(this.http, this.selected.id, value.result, value.evidence.split(',').map(item => item.trim()).filter(Boolean), value.remark).subscribe({
-        next: updated => { this.saving = false; this.selected = updated; this.reload(); this.clearances.load(1, 200); this.snack.open('检查结论已记录', '关闭', { duration: 2200 }); },
+        next: updated => {
+          this.saving = false;
+          this.selected = updated;
+          this.reload();
+          this.clearances.load(1, 200);
+          this.loadRecovery(updated.turnaround_id);
+          this.snack.open(updated.kind === 'recheck' ? '复查结论已记录' : '检查结论已记录', '关闭', { duration: 2200 });
+        },
         error: error => { this.saving = false; this.snack.open(parseHttpError(error), '关闭', { duration: 4000 }); },
       });
     });

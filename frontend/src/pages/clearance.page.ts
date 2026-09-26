@@ -11,15 +11,17 @@ import { MatPaginatorModule, PageEvent } from '@angular/material/paginator';
 import { MatSelectModule } from '@angular/material/select';
 import { MatSnackBar, MatSnackBarModule } from '@angular/material/snack-bar';
 import { clearanceDecideApi } from '../api/clearance.api';
+import { turnaroundRecoveryApi } from '../api/turnaround.api';
 import { ClearancePanelComponent } from '../components/common/clearance-panel.component';
 import { ConfirmDialogComponent } from '../components/common/confirm-dialog.component';
+import { RecoveryPanelComponent } from '../components/common/recovery-panel.component';
 import { StatusBadgeComponent } from '../components/common/status-badge.component';
 import { CLEARANCE_STATE_TEXT, ROLE } from '../constants/enums';
 import { useAuth } from '../hooks/use-auth';
 import { usePagination } from '../hooks/use-pagination';
 import { ClearanceStore } from '../stores/clearance.store';
 import { TurnaroundStore } from '../stores/turnaround.store';
-import { ClearanceDecision, ClearanceState } from '../types';
+import { ClearanceDecision, ClearanceState, RecoveryDetail } from '../types';
 import { parseHttpError, useHttp } from '../utils/request';
 
 @Component({
@@ -27,7 +29,7 @@ import { parseHttpError, useHttp } from '../utils/request';
   standalone: true,
   imports: [
     CommonModule, ReactiveFormsModule, MatButtonModule, MatDialogModule, MatFormFieldModule, MatIconModule,
-    MatInputModule, MatPaginatorModule, MatProgressBarModule, MatSelectModule, MatSnackBarModule, ClearancePanelComponent, StatusBadgeComponent,
+    MatInputModule, MatPaginatorModule, MatProgressBarModule, MatSelectModule, MatSnackBarModule, ClearancePanelComponent, RecoveryPanelComponent, StatusBadgeComponent,
   ],
   template: `
     <header class="page-head">
@@ -63,15 +65,18 @@ import { parseHttpError, useHttp } from '../utils/request';
           <span><small>前一状态</small>{{ selected.previous_state ? stateText[selected.previous_state] : '首次决定' }}</span>
           <span><small>操作人员</small>{{ selected.operator_id ? '#' + selected.operator_id : '待分配' }}</span>
         </div>
-        <form *ngIf="canManage && selected.state !== 'revoked'" [formGroup]="form" (ngSubmit)="decide()" class="decision-form">
-          <h3>{{ selected.state === 'pending' ? '形成放行决定' : '变更为撤销状态' }}</h3>
+        <app-recovery-panel *ngIf="selected.state === 'revoked' && recovery" [detail]="recovery" [canInspect]="canInspect" (changed)="loadRecovery()"></app-recovery-panel>
+        <form *ngIf="canManage" [formGroup]="form" (ngSubmit)="decide()" class="decision-form">
+          <h3>{{ formTitle }}</h3>
           <mat-form-field appearance="outline"><mat-label>目标状态</mat-label><mat-select formControlName="state"><mat-option *ngFor="let state of targetStates" [value]="state">{{ stateText[state] }}</mat-option></mat-select></mat-form-field>
           <mat-form-field appearance="outline" *ngIf="form.controls.state.value === 'restricted'"><mat-label>运行限制</mat-label><textarea matInput rows="2" formControlName="restrictions" placeholder="例如：仅允许低速牵引，不得接入地面电源"></textarea></mat-form-field>
           <mat-form-field appearance="outline"><mat-label>决定依据</mat-label><textarea matInput rows="3" formControlName="reason"></textarea></mat-form-field>
           <mat-form-field appearance="outline"><mat-label>证据编号 / 文件名</mat-label><input matInput formControlName="evidence" placeholder="多个证据用逗号分隔"></mat-form-field>
-          <div class="form-warning" *ngIf="form.controls.state.value === 'revoked'"><mat-icon>warning</mat-icon>撤销后不可恢复，请确认已通知现场调度。</div>
-          <button mat-flat-button type="submit" [class.danger-button]="form.controls.state.value === 'revoked'" [disabled]="form.invalid || saving"><mat-icon>gavel</mat-icon>记录决定</button>
+          <div class="form-warning" *ngIf="form.controls.state.value === 'revoked'"><mat-icon>warning</mat-icon>紧急撤销不受未完成检查阻断，撤销后周转将回到检查中并走复查恢复流程。</div>
+          <div class="form-warning" *ngIf="selected.state === 'revoked'"><mat-icon>history</mat-icon>撤销恢复：设备未恢复、复查未通过或仍有待处理复查时将被明确拒绝。</div>
+          <button mat-flat-button type="submit" [class.danger-button]="form.controls.state.value === 'revoked'" [disabled]="form.invalid || saving"><mat-icon>gavel</mat-icon>{{ selected.state === 'revoked' ? '重新记录决定' : '记录决定' }}</button>
         </form>
+        <p class="readonly-note" *ngIf="!canManage">当前为只读账号，可查看撤销原因、设备状态与复查进度，但不能提交复查或重新放行。</p>
       </aside>
       <ng-template #selectionHint><aside class="decision-pane placeholder"><mat-icon>verified_user</mat-icon><strong>选择放行记录</strong><span>查看当前状态并形成安全决定</span></aside></ng-template>
     </section>
@@ -87,8 +92,10 @@ export class ClearancePage implements OnInit {
   private readonly auth = useAuth();
   readonly pagination = usePagination(20);
   readonly canManage = this.auth.hasRole(ROLE.ADMIN, ROLE.SAFETY_MANAGER);
+  readonly canInspect = this.auth.hasRole(ROLE.ADMIN, ROLE.INSPECTOR);
   readonly stateText = CLEARANCE_STATE_TEXT;
   selected: ClearanceDecision | null = null;
+  recovery: RecoveryDetail | null = null;
   filter = '';
   saving = false;
   targetStates: Array<Exclude<ClearanceState, 'pending'>> = ['cleared', 'restricted', 'revoked'];
@@ -97,18 +104,41 @@ export class ClearancePage implements OnInit {
     restrictions: [''], reason: ['', Validators.required], evidence: ['', Validators.required],
   });
 
+  get formTitle(): string {
+    if (!this.selected) return '形成放行决定';
+    if (this.selected.state === 'pending') return '形成放行决定';
+    if (this.selected.state === 'revoked') return '复查通过后重新决定';
+    return '变更为撤销状态';
+  }
+
   ngOnInit(): void { this.reload(); this.turnarounds.load(1, 200); }
   flightLabel(turnaroundId: number): string {
     const row = this.turnarounds.items().find(item => item.id === turnaroundId);
     return row ? `${row.flight_no} / ${row.stand}` : `周转 #${turnaroundId}`;
   }
-  reload(): void { this.selected = null; this.store.load(this.pagination.page(), this.pagination.pageSize(), this.filter); }
+  reload(): void { this.selected = null; this.recovery = null; this.store.load(this.pagination.page(), this.pagination.pageSize(), this.filter); }
   resetAndLoad(): void { this.pagination.reset(); this.reload(); }
-  pageChanged(event: PageEvent): void { this.selected = null; this.pagination.setPage(event.pageIndex + 1); this.pagination.pageSize.set(event.pageSize); this.reload(); }
+  pageChanged(event: PageEvent): void { this.selected = null; this.recovery = null; this.pagination.setPage(event.pageIndex + 1); this.pagination.pageSize.set(event.pageSize); this.reload(); }
   select(item: ClearanceDecision): void {
     this.selected = item;
-    this.targetStates = item.state === 'pending' ? ['cleared', 'restricted', 'revoked'] : ['revoked'];
+    this.recovery = null;
+    if (item.state === 'pending') {
+      this.targetStates = ['cleared', 'restricted', 'revoked'];
+    } else if (item.state === 'revoked') {
+      this.targetStates = ['cleared', 'restricted'];
+      this.loadRecovery();
+    } else {
+      this.targetStates = ['revoked'];
+    }
     this.form.reset({ state: this.targetStates[0], restrictions: '', reason: '', evidence: '' });
+  }
+
+  loadRecovery(): void {
+    if (!this.selected) return;
+    turnaroundRecoveryApi(this.http, this.selected.turnaround_id).subscribe({
+      next: detail => { this.recovery = detail; },
+      error: error => this.snack.open(parseHttpError(error), '关闭', { duration: 4000 }),
+    });
   }
 
   decide(): void {
@@ -120,7 +150,9 @@ export class ClearancePage implements OnInit {
     }
     const danger = value.state === 'revoked';
     this.dialog.open(ConfirmDialogComponent, { data: {
-      title: `确认${this.stateText[value.state]}`, message: `该决定将立即写入状态迁移和审计证据，确认继续？`,
+      title: `确认${this.stateText[value.state]}`, message: this.selected.state === 'revoked'
+        ? '复查恢复后重新形成放行决定，将写入状态迁移和审计证据，确认继续？'
+        : '该决定将立即写入状态迁移和审计证据，确认继续？',
       confirmText: '确认记录', danger,
     }}).afterClosed().subscribe(confirmed => {
       if (!confirmed || !this.selected) return;
@@ -129,7 +161,7 @@ export class ClearancePage implements OnInit {
         turnaround_id: this.selected.turnaround_id, state: value.state, restrictions: value.restrictions,
         reason: value.reason, evidence: value.evidence.split(',').map(item => item.trim()).filter(Boolean),
       }).subscribe({
-        next: updated => { this.saving = false; this.selected = updated; this.store.load(this.pagination.page(), this.pagination.pageSize(), this.filter); this.snack.open('安全放行决定已记录', '关闭', { duration: 2500 }); },
+        next: () => { this.saving = false; this.selected = null; this.recovery = null; this.store.load(this.pagination.page(), this.pagination.pageSize(), this.filter); this.snack.open('安全放行决定已记录', '关闭', { duration: 2500 }); },
         error: error => { this.saving = false; this.snack.open(parseHttpError(error), '关闭', { duration: 4500 }); },
       });
     });

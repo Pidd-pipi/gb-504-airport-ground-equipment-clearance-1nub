@@ -14,6 +14,7 @@ func (r *Router) registerTurnaroundRoutes(group *gin.RouterGroup) {
 	routes.GET("/summary", r.turnaround.Summary)
 	routes.GET("/:id", r.turnaround.Get)
 	routes.GET("/:id/readiness", r.turnaround.Readiness)
+	routes.GET("/:id/recovery", r.turnaround.Recovery)
 	routes.POST("", middleware.RequireRole(constants.RoleAdmin, constants.RoleSafetyManager), r.turnaround.Create)
 	routes.PATCH("/:id/status", middleware.RequireRole(constants.RoleAdmin, constants.RoleSafetyManager), r.turnaround.ChangeStatus)
 }

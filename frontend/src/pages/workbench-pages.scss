@@ -83,6 +83,7 @@ td small.note { max-width: 190px; overflow: hidden; text-overflow: ellipsis; whi
 .sequence { width: 30px; height: 30px; display: grid; place-items: center; background: #edf2f3; border-radius: 4px; color: #64767c; font-size: 11px; font-weight: 700; }
 .check-copy strong, .check-copy small, .decision-row strong, .decision-row small { display: block; }
 .check-copy small, .decision-row small { margin-top: 4px; color: #7a898e; font-size: 10px; }
+.kind-tag { display: inline-block; margin-left: 6px; padding: 1px 6px; border-radius: 8px; background: #fdecea; color: #b42318; font-size: 10px; font-style: normal; vertical-align: middle; }
 .check-row > mat-icon:last-child, .decision-row > mat-icon:last-child { color: #9ba8ac; }
 .inspection-pane, .decision-pane { padding: 16px; }
 .inspection-pane > header { display: flex; justify-content: space-between; gap: 12px; padding-bottom: 14px; border-bottom: 1px solid #e1e7e8; }
@@ -109,6 +110,7 @@ td small.note { max-width: 190px; overflow: hidden; text-overflow: ellipsis; whi
 .form-warning { display: flex; align-items: center; gap: 7px; margin-bottom: 12px; padding: 9px; color: #a63b32; background: #fff0ed; font-size: 11px; border-radius: 4px; }
 .form-warning mat-icon { font-size: 18px; width: 18px; height: 18px; }
 .danger-button { background: #b42318 !important; }
+.readonly-note { margin: 12px 0 0; padding: 10px 12px; border: 1px solid #d8e0e2; border-radius: 4px; background: #f4f6f6; color: #68797f; font-size: 11px; line-height: 1.6; }
 
 .audit-summary { min-height: 54px; display: flex; align-items: center; gap: 10px; margin-bottom: 18px; padding: 10px 14px; border: 1px solid #cde0dd; border-radius: 5px; background: #f2f9f7; color: #53676e; font-size: 11px; }
 .audit-summary > mat-icon { color: #14835d; }

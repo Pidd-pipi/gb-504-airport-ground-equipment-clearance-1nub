@@ -40,7 +40,7 @@ func (r *SafetyCheckRepository) CreateManyTx(tx *gorm.DB, checks []model.SafetyC
 	return nil
 }
 
-func (r *SafetyCheckRepository) List(page, pageSize int, turnaroundID uint64, result string) ([]model.SafetyCheck, int64, error) {
+func (r *SafetyCheckRepository) List(page, pageSize int, turnaroundID uint64, result, kind string) ([]model.SafetyCheck, int64, error) {
 	var rows []model.SafetyCheck
 	var total int64
 	query := r.db.Model(&model.SafetyCheck{})
@@ -49,6 +49,9 @@ func (r *SafetyCheckRepository) List(page, pageSize int, turnaroundID uint64, re
 	}
 	if result != "" {
 		query = query.Where("result = ?", result)
+	}
+	if kind != "" {
+		query = query.Where("kind = ?", kind)
 	}
 	if err := query.Count(&total).Error; err != nil {
 		return nil, 0, fmt.Errorf("count safety checks: %w", err)

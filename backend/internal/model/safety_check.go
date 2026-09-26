@@ -10,6 +10,7 @@ type SafetyCheck struct {
 	Sequence     int        `gorm:"not null;default:1;uniqueIndex:ux_safety_check_sequence,priority:2" json:"sequence"`
 	CheckCode    string     `gorm:"size:40;not null;uniqueIndex:ux_safety_check_code,priority:2" json:"check_code"`
 	ItemName     string     `gorm:"size:200;not null" json:"item_name"`
+	Kind         string     `gorm:"size:20;not null;default:initial;index;check:chk_safety_checks_kind,kind IN ('initial','recheck')" json:"kind"`
 	RiskLevel    string     `gorm:"size:20;not null;default:medium;check:chk_safety_checks_risk,risk_level IN ('low','medium','high','critical')" json:"risk_level"`
 	Result       string     `gorm:"size:20;not null;default:pending;index;check:chk_safety_checks_result,result IN ('pending','passed','failed')" json:"result"`
 	Evidence     JSONList   `gorm:"type:jsonb" json:"evidence"`

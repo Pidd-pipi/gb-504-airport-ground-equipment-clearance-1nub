@@ -23,6 +23,7 @@ type SafetyCheckRequest struct {
 	CheckCode    string   `json:"check_code" binding:"required,max=40"`
 	ItemName     string   `json:"item_name" binding:"required,max=200"`
 	RiskLevel    string   `json:"risk_level" binding:"required,oneof=low medium high critical"`
+	Kind         string   `json:"kind" binding:"omitempty,oneof=initial recheck"`
 	Evidence     []string `json:"evidence"`
 }
 

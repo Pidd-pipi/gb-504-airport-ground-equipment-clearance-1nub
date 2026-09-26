@@ -69,6 +69,19 @@ func (h *TurnaroundHandler) Readiness(c *gin.Context) {
 	OK(c, result)
 }
 
+func (h *TurnaroundHandler) Recovery(c *gin.Context) {
+	id, ok := parseID(c)
+	if !ok {
+		return
+	}
+	result, err := h.svc.RecoveryDetail(id)
+	if err != nil {
+		handleServiceError(c, h.logger, err, "turnaround recovery detail")
+		return
+	}
+	OK(c, result)
+}
+
 func (h *TurnaroundHandler) Create(c *gin.Context) {
 	var request dto.TurnaroundCreateRequest
 	if err := c.ShouldBindJSON(&request); err != nil {

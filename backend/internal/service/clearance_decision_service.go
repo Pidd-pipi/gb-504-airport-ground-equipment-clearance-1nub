@@ -98,13 +98,26 @@ func (s *ClearanceDecisionService) Decide(turnaroundID, operatorID uint64, state
 			if len(checks) == 0 {
 				return util.NewAppError(constants.CodeStateConflict, "at least one safety check is required")
 			}
+			recovery := current.State == constants.ClearanceRevoked
 			for _, check := range checks {
 				if check.Result == constants.CheckPending {
 					return util.NewAppError(constants.CodeStateConflict, "all safety checks must be reviewed before clearance")
 				}
-				if state == constants.ClearanceCleared && check.Result == constants.CheckFailed {
-					return util.NewAppError(constants.CodeStateConflict, "failed checks prevent full clearance")
+			}
+			if state == constants.ClearanceCleared {
+				for _, check := range blockingFailedChecks(checks, recovery) {
+					return util.NewAppError(constants.CodeStateConflict, "failed checks prevent full clearance: "+check.CheckCode)
 				}
+			}
+		}
+		if previous := current.State; previous == constants.ClearanceRevoked && state != constants.ClearanceRevoked {
+			// Re-deciding after an equipment fault revocation follows the full
+			// recovery workflow: equipment restored, recovery rechecks passed.
+			recoveryBlockers := evaluateRecoveryGates(turnaround, checks, func(unitID uint64) (*model.GroundUnit, error) {
+				return s.unitRepo.FindByIDTx(tx, unitID)
+			})
+			if len(recoveryBlockers) > 0 {
+				return util.NewAppError(constants.CodeStateConflict, strings.Join(recoveryBlockers, "; "))
 			}
 		}
 		if state == constants.ClearanceCleared {
@@ -131,7 +144,14 @@ func (s *ClearanceDecisionService) Decide(turnaroundID, operatorID uint64, state
 		if err := s.repo.SaveTx(tx, current); err != nil {
 			return err
 		}
-		turnaround.Status = constants.TurnaroundDecisioned
+		previousStatus := turnaround.Status
+		if state == constants.ClearanceRevoked {
+			// Manual emergency revocation reopens the turnaround as well, so the
+			// recovery workflow (recheck + re-decision) stays available.
+			turnaround.Status = constants.TurnaroundChecking
+		} else {
+			turnaround.Status = constants.TurnaroundDecisioned
+		}
 		turnaround.Version++
 		if err := s.turnaroundRepo.SaveTx(tx, turnaround); err != nil {
 			return err
@@ -139,6 +159,7 @@ func (s *ClearanceDecisionService) Decide(turnaroundID, operatorID uint64, state
 		detail, _ := json.Marshal(map[string]any{
 			"previous_state": previous, "state": state, "reason": reason,
 			"restrictions": restrictions, "evidence": evidence, "request_id": requestID,
+			"previous_turnaround_status": previousStatus, "turnaround_status": turnaround.Status,
 		})
 		audit := &model.AuditLog{OperatorID: operatorID, OperatorName: operatorName, Action: "CLEARANCE_TRANSITION",
 			EntityType: "clearance", EntityID: strconv.FormatUint(current.ID, 10), Detail: string(detail), IP: ip, CreatedAt: time.Now()}
@@ -151,7 +172,11 @@ func (s *ClearanceDecisionService) Decide(turnaroundID, operatorID uint64, state
 	if err != nil {
 		return nil, err
 	}
-	s.logger.Info(constants.LogClearanceChanged, "turnaround_id", turnaroundID, "state", state, "operator_id", operatorID)
+	if decision.PreviousState == constants.ClearanceRevoked {
+		s.logger.Info(constants.LogClearanceRecovered, "turnaround_id", turnaroundID, "state", state, "operator_id", operatorID)
+	} else {
+		s.logger.Info(constants.LogClearanceChanged, "turnaround_id", turnaroundID, "state", state, "operator_id", operatorID)
+	}
 	return decision, nil
 }
 
@@ -159,5 +184,13 @@ func allowedClearanceTransition(from, to string) bool {
 	if from == constants.ClearancePending {
 		return to == constants.ClearanceCleared || to == constants.ClearanceRestricted || to == constants.ClearanceRevoked
 	}
-	return (from == constants.ClearanceCleared || from == constants.ClearanceRestricted) && to == constants.ClearanceRevoked
+	if (from == constants.ClearanceCleared || from == constants.ClearanceRestricted) && to == constants.ClearanceRevoked {
+		return true
+	}
+	// Recovery: a revoked turnaround may be re-decided after equipment repair
+	// and passing recovery rechecks; it cannot be revoked again directly.
+	if from == constants.ClearanceRevoked {
+		return to == constants.ClearanceCleared || to == constants.ClearanceRestricted
+	}
+	return false
 }
